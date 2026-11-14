@@ -93,6 +93,12 @@ export function ReleaseUpdates({ initial, initialJob }: { initial: ReleaseState;
   const pollError = failures >= LOST_AFTER_FAILURES ? t('settings:releaseUpdates.connectionLost') : '';
   const error = action.error || pollError || container.error;
   const message = serverText(data);
+  /* 下载内容只对安装包有意义，而且只在有新版或正在下载时：源码与容器换不上这个包，已是最新时也没有可下的。 */
+  const packageKind = data.installation_code === 'standalone' && (data.state === 'available' || job.state !== 'idle')
+    ? data.package_kind : undefined;
+  const packageHelp = packageKind === 'update' ? t('settings:releaseUpdates.updatePackageHelp')
+    : packageKind === 'full' ? t('settings:releaseUpdates.includesMediaTools')
+      : packageKind === 'installer' ? t('settings:releaseUpdates.installerHelp') : '';
   const reading = job.state === 'downloading' && job.total
     ? `${((job.downloaded || 0) / 1048576).toFixed(1)} / ${(job.total / 1048576).toFixed(1)} MB`
     : `${job.progress}%`;
@@ -104,15 +110,12 @@ export function ReleaseUpdates({ initial, initialJob }: { initial: ReleaseState;
         <Fact term={t('settings:releaseUpdates.installation')}>{serverLabel(`release.installation.${data.installation_code}`, data.installation)}</Fact>
         <Fact term={t('settings:releaseUpdates.channel')}>{serverLabel(`release.channel.${data.channel_code}`, data.channel)}</Fact>
         <Fact term={t('settings:releaseUpdates.latestVersion')}>{data.latest_version || t('settings:shared.notFound')}</Fact>
-        {data.package_kind ? <Fact term={t('settings:releaseUpdates.package')}>
-          {data.package_kind === 'update' ? t('settings:releaseUpdates.appUpdatePackage') : data.package_kind === 'installer' ? t('settings:releaseUpdates.macosDiskImage') : t('settings:releaseUpdates.appAndTools')}
+        {packageKind ? <Fact term={t('settings:releaseUpdates.package')}>
+          {packageKind === 'update' ? t('settings:releaseUpdates.appUpdatePackage') : packageKind === 'installer' ? t('settings:releaseUpdates.macosDiskImage') : t('settings:releaseUpdates.appAndTools')}
           {data.asset_size ? ` · ${(data.asset_size / 1048576).toFixed(1)} MB` : ''}
         </Fact> : null}
       </FactList>
-      {data.package_kind === 'update'
-        ? <Help>{t('settings:releaseUpdates.updatePackageHelp')}</Help>
-        : data.package_kind === 'full' ? <Help>{t('settings:releaseUpdates.includesMediaTools')}</Help>
-          : data.package_kind === 'installer' ? <Help>{t('settings:releaseUpdates.installerHelp')}</Help> : null}
+      {packageHelp ? <Stack><Help>{packageHelp}</Help></Stack> : null}
       {data.state === 'unchecked' && !data.checked_at && !error && job.state === 'idle' ? null : <Stack divided>
         {data.checked_at ? <Help>{t('settings:releaseUpdates.checkedAt', { time: new Date(data.checked_at * 1000).toLocaleString(interfaceLanguage) })}</Help> : null}
         {container.job.state === 'done' ? null : data.state === 'available' && !error
