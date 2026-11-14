@@ -53,7 +53,7 @@ class BrowserTests(unittest.TestCase):
         self.downloads.credentials.save(dl.CLOUDDRIVE_CREDENTIAL, {"token": "cloud-secret"})
         self.service.search = Mock(return_value={"items": [{"name": "ABC-123 1080p", "uri": MAGNET}]})
         # 通常版页面的特典版探测会问 DMM；用例里一律答没有，需要时单独替换。
-        self.service.edition_probe = Mock(return_value=False)
+        self.service.edition_probe = Mock(return_value=False, **{"whole.return_value": ""})
         self.client = TestClient(self.app, client=("127.0.0.1", 12345))
         self.headers = {"X-Token": "admin-secret"}
         response = self.configure("enable")
@@ -362,7 +362,7 @@ class BrowserTests(unittest.TestCase):
             response = self.client.get("/api/jav-browser/identify", params={"source_url": source}, headers=self.script_headers)
             self.assertEqual(response.status_code, 200, response.text)
             return response.json()
-        self.service.edition_probe = Mock(side_effect=lambda cid: cid == "1sdjs00304")
+        self.service.edition_probe = Mock(side_effect=lambda cid: cid == "1sdjs00304", **{"whole.return_value": ""})
         self.assertEqual(identify("https://video.dmm.co.jp/av/content/?id=1sdjs00304v")["edition"], "bonus")
         self.assertEqual(identify("https://clip.fanza.jp/moment?id=img-sdjs00304v-001")["edition"], "bonus")
         self.assertEqual(identify("https://video.dmm.co.jp/av/content/?id=1sdjs00304")["edition"], "regular")
@@ -370,6 +370,35 @@ class BrowserTests(unittest.TestCase):
         self.assertNotIn("edition", identify("https://www.mgstage.com/product/product_detail/300MIUM-1239/"))
         # 特典版页面看商品号就够，只有通常版 DMM 页面才问。
         self.assertEqual([call.args[0] for call in self.service.edition_probe.call_args_list], ["1sdjs00304", "ssis00519"])
+
+    def test_a_part_product_counts_as_the_whole_release_only_when_dmm_sells_the_whole(self):
+        """`sora00613a` 是整片 `sora00613` 的分段；`1dandy00851c` 没有整片，尾字母是另一部作品。"""
+        probe = EditionProbe(self.root, clock=lambda: 0.0)
+        asked = []
+        probe._ask = lambda cid: asked.append(cid) or cid == "sora00613"
+        self.assertEqual(probe.whole("sora00613a"), "sora00613")
+        self.assertEqual(probe.whole("sora00613b"), "sora00613")
+        self.assertEqual(probe.whole("1dandy00851c"), "")
+        self.assertEqual(probe.whole("1sdjs00304v"), "", "特典版另有规则")
+        self.assertEqual(probe.whole("ssis00519"), "", "没有尾字母的不问")
+        self.assertEqual(asked, ["sora00613", "1dandy00851"])
+        self.service.edition_probe = probe
+
+        def identify(source):
+            response = self.client.get("/api/jav-browser/identify", params={"source_url": source}, headers=self.script_headers)
+            self.assertEqual(response.status_code, 200, response.text)
+            return response.json()["code"]
+        self.assertEqual(identify("https://video.dmm.co.jp/av/content/?id=sora00613a"), "SORA-613")
+        self.assertEqual(identify("https://video.dmm.co.jp/av/content/?id=1dandy00851c"), "DANDY-851C")
+        # 之前按分段番号失败的那一行，重试时按整片添加并由整片接替；搜索用整片番号。
+        self.service.rows["SORA-613A"] = {"state": "failed", "provider": "115", "source_url": "", "message": "x"}
+        response = self.add("SORA-613A", source_url="https://video.dmm.co.jp/av/content/?id=sora00613a")
+        self.assertEqual((response.status_code, response.json()["code"]), (200, "SORA-613"))
+        self.assertNotIn("SORA-613A", self.service.rows)
+        self.service.search.return_value = {"items": [{"name": "SORA-613 1080p", "uri": MAGNET}]}
+        self.service.process_one()
+        self.service.search.assert_called_once_with(self.app.state.web_contract, {"code": "SORA-613", "goal": "quality"})
+        self.assertEqual(self.service.rows["SORA-613"]["state"], "submitted")
 
     def test_edition_probe_asks_each_product_once_and_pauses_after_a_failure(self):
         clock = [0.0]
