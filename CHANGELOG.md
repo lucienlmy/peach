@@ -37,7 +37,7 @@ Removed / Fixed / Security。
 
 ## [0.58.0] - 2026-11-14
 
-> Peach now has a full English interface. It follows your browser language automatically; if you picked Chinese under Settings → Interface language before, switch it back to Auto or English. Titles, names and tags stay in their original language. Docker images were not published for 0.58.0; they ship with 0.58.1, including linux/arm64 and the `latest` tag.
+> Peach now has a full English interface. It follows your browser language automatically; if you picked Chinese under Settings → Interface language before, switch it back to Auto or English. Titles, names and tags stay in their original language. Docker images were not published for 0.58.0; they ship with 0.59.0, including linux/arm64 and the `latest` tag.
 
 ### 新增
 
