@@ -31,7 +31,7 @@ from .task_retry import RETRY_DELAYS, RetryableTaskError, retry_delay
 from .follow_secrets import CredentialError
 from .feeds import scan_code
 from .fsutil import atomic_write_text
-from .sources.dmm import code_from_cid
+from .sources.dmm import code_from_cid, guessed_cid
 from .jav_editions import bonus_cid
 from .user_messages import UserFacingError, UserValueError
 
@@ -218,6 +218,19 @@ def identify_source(value: object, hint: str = "") -> str:
     if hint and not same_release_code(code, code_key(hint)):
         raise UserValueError("errors.javBrowser.codeProductMismatch")
     return code
+
+
+def whole_release(code: str, page: object, probe) -> str:
+    """分段发售的作品按整片番号算：DMM 上 `SORA-613A` 的整片 `sora00613` 也在售时返回 `SORA-613`。
+
+    商品号先取来源页地址里的，没有时按番号猜；与这个番号对不上、问不到 DMM 或整片不在售时原样返回。
+    """
+    whole_cid = getattr(probe, "whole", None)
+    cid = dmm_cid(page) or guessed_cid(code)
+    if whole_cid is None or not cid or code_key(code_from_cid(cid)) != code:
+        return code
+    whole = whole_cid(cid)
+    return code_key(code_from_cid(whole)) if whole else code
 
 
 #: 种子名、磁力显示名或文件名里标明特典版的写法。
@@ -685,12 +698,16 @@ class JavBrowser:
             page = ""
         else:
             page = source_page(body.get("source_url"))
+        # 分段发售的按整片添加；之前按分段番号记下、已经结束的那一行由整片这一行接替。
+        whole = whole_release(code, page, self.edition_probe)
+        part, code = (code if whole != code else ""), whole
         with self._lock:
             config = self._config()
             if not config.get("token_hash"):
                 raise UserValueError("errors.javBrowser.notEnabled")
             status = self.status(code)
             if status["state"] in ACTIVE | {"owned", "submitted", "ingested"}:
+                self._drop_part(part)
                 return status
             if body.get("switch") not in (None, False, True):
                 raise UserValueError("errors.javBrowser.invalidSwitch")
@@ -714,9 +731,17 @@ class JavBrowser:
                 "bonus" if bonus_cid(dmm_cid(page)) else "")
             self.rows[code] = {"state": "queued", "provider": config["provider"], "source_url": page,
                                **({"skip": skip[-20:]} if skip else {}), **({"edition": edition} if edition else {})}
+            self._drop_part(part)
             self._save()
             self._wake.set()
             return self.status(code)
+
+    def _drop_part(self, part: str) -> None:
+        """整片接手后撤掉按分段番号记下、没生成下载任务就结束的那一行（失败或无资源）。调用方持锁。"""
+        row = self.rows.get(part) if part else None
+        if row and row["state"] in {"failed", "no_match"} and not row.get("task_id"):
+            del self.rows[part]
+            self._save()
 
     def _requeue_recoverable(self) -> None:
         """把能自动重来的失败放回队列，原来的位置不变；无资源仍等用户决定，升级前没分清来源的无资源除外。
